@@ -1,0 +1,28 @@
+# ModelSim files
+*.wlf
+work/
+transcript
+*.vstf
+*.mpf
+
+# Quartus files
+*.qpf
+*.qsf
+*.qws
+db/
+incremental_db/
+output_files/
+*.rpt
+*.done
+*.jdi
+*.pin
+*.sopcinfo
+*.summary
+*.rbf
+*.sof
+
+# Temporary files
+*.bak
+*~
+*.swp
+.DS_Store

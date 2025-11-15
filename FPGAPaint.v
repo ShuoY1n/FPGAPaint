@@ -6,11 +6,34 @@ module FPGAPaint (
 	output [9:0] LEDR,
 
 	inout PS2_CLK,
-	inout PS2_DAT
+	inout PS2_DAT,
+	
+	// VGA outputs
+	output [7:0] VGA_R,
+	output [7:0] VGA_G,
+	output [7:0] VGA_B,
+	output VGA_HS,
+	output VGA_VS,
+	output VGA_BLANK_N,
+	output VGA_SYNC_N,
+	output VGA_CLK,
+	
+	// HEX displays for testing - DELETE THIS SECTION AFTER TESTING
+	output [6:0] HEX5,
+	output [6:0] HEX4,
+	output [6:0] HEX3,
+	output [6:0] HEX2,
+	output [6:0] HEX1,
+	output [6:0] HEX0
 );
 
 parameter SCREEN_WIDTH = 320;
-parameter SCREEN_HEIGHT = 480;
+parameter SCREEN_HEIGHT = 240;
+
+// Color definitions (9-bit: 3 bits R, 3 bits G, 3 bits B)
+parameter COLOR_BACKGROUND = 9'b000_000_000; // Black background
+parameter COLOR_DRAW = 9'b111_111_111;       // White drawing color
+parameter COLOR_ERASE = 9'b000_000_000;      // Black (for erasing)
 
 wire reset;
 assign reset = ~KEY[0];
@@ -25,11 +48,24 @@ wire [8:0] mouse_delta_x; // First bit is the direction of movement
 wire [8:0] mouse_delta_y;
 wire mouse_data_valid;
 
-reg [9:0] mouse_x_pos;
-reg [9:0] mouse_y_pos;
+reg [8:0] mouse_x_pos;  // 9 bits for X (0-319)
+reg [7:0] mouse_y_pos;  // 8 bits for Y (0-239)
 
 wire drawing_enabled;
 assign drawing_enabled = SW[0];
+
+// VGA drawing signals
+reg [8:0] vga_color;
+reg [8:0] vga_x;  // 9 bits for X (0-319)
+reg [7:0] vga_y;  // 8 bits for Y (0-239)
+reg vga_write;
+
+// Square drawing
+parameter SQUARE_SIZE = 5;
+
+// Drawing state
+wire drawing_active;
+assign drawing_active = drawing_enabled && mouse_left_button;
 
 // Direction indicators - latched so they stay on once detected
 reg move_left_latched;
@@ -48,6 +84,9 @@ assign move_left_detect = mouse_data_valid && (mouse_delta_x[8] == 1) && (mouse_
 assign move_right_detect = mouse_data_valid && (mouse_delta_x[8] == 0) && (mouse_delta_x[7:0] != 0);
 assign move_up_detect = mouse_data_valid && (mouse_delta_y[8] == 1) && (mouse_delta_y[7:0] != 0);
 assign move_down_detect = mouse_data_valid && (mouse_delta_y[8] == 0) && (mouse_delta_y[7:0] != 0);
+
+reg [7:0] corrected_delta_x;
+reg [7:0] corrected_delta_y;
 
 // Latch movement indicators - once set, stay on until reset
 always @(posedge CLOCK_50) begin
@@ -108,56 +147,215 @@ always @(posedge CLOCK_50) begin
 		mouse_x_pos <= SCREEN_WIDTH / 2; // Start at center of screen
 		mouse_y_pos <= SCREEN_HEIGHT / 2;
 	end
-	else if (mouse_data_valid) begin
-		// Update X position only when we have valid movement data
-		if (mouse_delta_x[7:0] != 0) begin
-			if (mouse_delta_x[8] == 0) begin // positive movement (right)
-				if (mouse_x_pos + mouse_delta_x[7:0] < SCREEN_WIDTH)
-					mouse_x_pos <= mouse_x_pos + mouse_delta_x[7:0];
-				else
-					mouse_x_pos <= SCREEN_WIDTH - 1;
+	else begin
+		// Update mouse position
+		if (mouse_data_valid) begin
+			// Calculate corrected deltas: if >= 128, it's encoded as 256 - actual_delta
+			if (mouse_delta_x[7:0] >= 128) // negative movement (encoded)
+				corrected_delta_x = 8'd256 - mouse_delta_x[7:0];
+			else
+				corrected_delta_x = mouse_delta_x[7:0];
+				
+			if (mouse_delta_y[7:0] >= 128) // negative movement (encoded)
+				corrected_delta_y = 8'd256 - mouse_delta_y[7:0];
+			else
+				corrected_delta_y = mouse_delta_y[7:0];
+			
+			// Update X position only when we have valid movement data
+			if (corrected_delta_x != 0) begin
+				if (mouse_delta_x[7:0] < 128) begin // positive movement (right)
+					// Use wider addition to prevent overflow issues
+					if (mouse_x_pos + corrected_delta_x < SCREEN_WIDTH)
+						mouse_x_pos <= mouse_x_pos + corrected_delta_x;
+					else
+						mouse_x_pos <= 9'd319; // SCREEN_WIDTH - 1
+				end
+				else begin // negative movement (left)
+					if (mouse_x_pos >= corrected_delta_x)
+						mouse_x_pos <= mouse_x_pos - corrected_delta_x;
+					else
+						mouse_x_pos <= 9'd0;
+				end
 			end
-			else begin // negative movement (left)
-				if (mouse_x_pos >= mouse_delta_x[7:0])
-					mouse_x_pos <= mouse_x_pos - mouse_delta_x[7:0];
-				else
-					mouse_x_pos <= 10'd0;
-			end
-		end
-		
-		// Update Y position only when we have valid movement data
-		// Y=0 is at top, Y increases downward
-		if (mouse_delta_y[7:0] != 0) begin
-			if (mouse_delta_y[8] == 0) begin // positive movement (down)
-				if (mouse_y_pos + mouse_delta_y[7:0] < SCREEN_HEIGHT)
-					mouse_y_pos <= mouse_y_pos + mouse_delta_y[7:0];
-				else
-					mouse_y_pos <= SCREEN_HEIGHT - 1;
-			end
-			else begin // negative movement (up)
-				if (mouse_y_pos >= mouse_delta_y[7:0])
-					mouse_y_pos <= mouse_y_pos - mouse_delta_y[7:0];
-				else
-					mouse_y_pos <= 10'd0;
+			
+			// Update Y position only when we have valid movement data
+			// Y=0 is at top, Y increases downward
+			if (corrected_delta_y != 0) begin
+				if (mouse_delta_y[7:0] > 128) begin // positive movement (down)
+					if (mouse_y_pos + corrected_delta_y < SCREEN_HEIGHT)
+						mouse_y_pos <= mouse_y_pos + corrected_delta_y;
+					else
+						mouse_y_pos <= 8'd239; // SCREEN_HEIGHT - 1
+				end
+				else begin // negative movement (up)
+					if (mouse_y_pos >= corrected_delta_y)
+						mouse_y_pos <= mouse_y_pos - corrected_delta_y;
+					else
+						mouse_y_pos <= 8'd0;
+				end
 			end
 		end
 	end
 end
 
+// Simple pixel drawing: just draw at cursor location when button is pressed
+// always @(posedge CLOCK_50) begin
+// 	if (reset) begin
+// 		vga_x <= 9'd0;
+// 		vga_y <= 8'd0;
+// 		vga_color <= COLOR_BACKGROUND;
+// 		vga_write <= 1'b0;
+// 	end
+// 	else begin
+// 		vga_write <= 1'b0;
+		
+// 		// Draw pixel at cursor location when drawing is enabled and button is pressed
+// 		if (drawing_enabled) begin
+// 			if (mouse_right_button) begin
+// 				vga_write <= 1'b1;
+// 				vga_x <= mouse_x_pos;
+// 				vga_y <= mouse_y_pos;
+// 				vga_color <= COLOR_DRAW;
+// 			end
+// 			else if (mouse_left_button) begin
+// 				vga_write <= 1'b1;
+// 				vga_x <= mouse_x_pos;
+// 				vga_y <= mouse_y_pos;
+// 				vga_color <= COLOR_ERASE;
+// 			end
+// 		end
+// 	end
+// end
 
-
-
+// VGA Adapter instance
+vga_adapter #(
+	.RESOLUTION("320x240"),
+	.COLOR_DEPTH(9),
+	.BACKGROUND_IMAGE("./white_320_240_9.mif")
+) vga_adapter_inst (
+	.resetn(~reset),
+	.clock(CLOCK_50),
+	.color(vga_color),
+	.x(vga_x),
+	.y(vga_y),
+	.write(vga_write),
+	.VGA_R(VGA_R),
+	.VGA_G(VGA_G),
+	.VGA_B(VGA_B),
+	.VGA_HS(VGA_HS),
+	.VGA_VS(VGA_VS),
+	.VGA_BLANK_N(VGA_BLANK_N),
+	.VGA_SYNC_N(VGA_SYNC_N),
+	.VGA_CLK(VGA_CLK)
+);
 
 // Display status on LEDs
 assign LEDR[0] = drawing_enabled; // LED[0] = drawing mode enabled
-assign LEDR[1] = mouse_right_button; // LED[2] = right mouse button
-assign LEDR[2] = mouse_left_button; // LED[1] = left mouse button
+assign LEDR[1] = mouse_right_button; // LED[1] = right mouse button
+assign LEDR[2] = mouse_left_button; // LED[2] = left mouse button
 assign LEDR[3] = move_right_latched;
 assign LEDR[4] = move_left_latched; // LED[4] = mouse moving left (latched)
 assign LEDR[5] = move_up_latched; // LED[5] = mouse moving up (latched)
 assign LEDR[6] = move_down_latched; // LED[6] = mouse moving down (latched)
-assign LEDR[7] = 1'b0; // LED[7] = unused
+assign LEDR[7] = drawing_active; // LED[7] = currently drawing
 assign LEDR[8] = 1'b0; // LED[8] = unused
 assign LEDR[9] = 1'b0; // LED[9] = unused
+
+// Square drawing - simple state machine
+reg [1:0] draw_state;
+reg [2:0] x_offset;  // 0 to SQUARE_SIZE-1 (0 to 4 for 5x5)
+reg [2:0] y_offset;  // 0 to SQUARE_SIZE-1 (0 to 4 for 5x5)
+
+parameter DRAW_IDLE = 2'b00;
+parameter DRAW_LOOP = 2'b01;
+parameter DRAW_FINISH = 2'b10;
+
+// Calculate pixel position (centered on cursor)
+// For 5x5 square, center is at offset 2
+// Calculate using unsigned arithmetic with bounds checking
+wire [9:0] px_temp;
+wire [8:0] py_temp;
+wire [9:0] px;
+wire [8:0] py;
+wire px_valid, py_valid;
+
+// Pixel X: mouse_x_pos + x_offset - 2 (centered)
+// First add, then check if >= 2 before subtracting
+assign px_temp = mouse_x_pos + x_offset;
+assign px_valid = (px_temp >= 2);
+assign px = px_valid ? (px_temp - 2) : 10'd0;
+
+// Pixel Y: mouse_y_pos + y_offset - 2 (centered)
+// First add, then check if >= 2 before subtracting
+assign py_temp = mouse_y_pos + y_offset;
+assign py_valid = (py_temp >= 2);
+assign py = py_valid ? (py_temp - 2) : 9'd0;
+
+always @(posedge CLOCK_50) begin
+	if (reset) begin
+		draw_state <= DRAW_IDLE;
+		x_offset <= 3'd0;
+		y_offset <= 3'd0;
+		vga_write <= 1'b0;
+		vga_x <= 9'd0;
+		vga_y <= 8'd0;
+		vga_color <= COLOR_BACKGROUND;
+	end
+	else begin
+		vga_write <= 1'b0;
+		
+		case (draw_state)
+			DRAW_IDLE: begin
+				if (drawing_enabled && (mouse_left_button || mouse_right_button)) begin
+					draw_state <= DRAW_LOOP;
+					x_offset <= 3'd0;
+					y_offset <= 3'd0;
+				end
+			end
+			
+			DRAW_LOOP: begin
+				// Draw all pixels in 5x5 square (no pattern check needed)
+				// Check screen bounds - only draw if valid and within screen
+				if (px_valid && py_valid && px < SCREEN_WIDTH && py < SCREEN_HEIGHT) begin
+					vga_write <= 1'b1;
+					vga_x <= px[8:0];
+					vga_y <= py[7:0];
+					vga_color <= mouse_right_button ? COLOR_DRAW : COLOR_ERASE;
+				end
+				
+				// Advance to next pixel in 5x5 grid
+				if (x_offset >= (SQUARE_SIZE - 1)) begin
+					// End of row - move to next row
+					x_offset <= 3'd0;
+					if (y_offset >= (SQUARE_SIZE - 1)) begin
+						// Done with all rows
+						draw_state <= DRAW_FINISH;
+					end
+					else begin
+						// Continue to next row - stay in DRAW_LOOP
+						y_offset <= y_offset + 1;
+						draw_state <= DRAW_LOOP;
+					end
+				end
+				else begin
+					// Continue in current row - stay in DRAW_LOOP
+					x_offset <= x_offset + 1;
+					draw_state <= DRAW_LOOP;
+				end
+			end
+			
+			DRAW_FINISH: begin
+				if (drawing_enabled && (mouse_left_button || mouse_right_button)) begin
+					draw_state <= DRAW_LOOP;
+					x_offset <= 3'd0;
+					y_offset <= 3'd0;
+				end
+				else begin
+					draw_state <= DRAW_IDLE;
+				end
+			end
+		endcase
+	end
+end
 
 endmodule

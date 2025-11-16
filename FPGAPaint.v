@@ -2,8 +2,6 @@ module FPGAPaint (
 	input [9:0] SW,
 	input [3:0] KEY,
 	input CLOCK_50,
-	
-	output [9:0] LEDR,
 
 	inout PS2_CLK,
 	inout PS2_DAT,
@@ -16,24 +14,16 @@ module FPGAPaint (
 	output VGA_VS,
 	output VGA_BLANK_N,
 	output VGA_SYNC_N,
-	output VGA_CLK,
-	
-	// HEX displays for testing - DELETE THIS SECTION AFTER TESTING
-	output [6:0] HEX5,
-	output [6:0] HEX4,
-	output [6:0] HEX3,
-	output [6:0] HEX2,
-	output [6:0] HEX1,
-	output [6:0] HEX0
+	output VGA_CLK
 );
 
 parameter SCREEN_WIDTH = 320;
 parameter SCREEN_HEIGHT = 240;
 
 // Color definitions (9-bit: 3 bits R, 3 bits G, 3 bits B)
-parameter COLOR_BACKGROUND = 9'b000_000_000; // Black background
-parameter COLOR_DRAW = 9'b111_111_111;       // White drawing color
-parameter COLOR_ERASE = 9'b000_000_000;      // Black (for erasing)
+parameter COLOR_BACKGROUND = 9'b111_111_111; // White background
+parameter COLOR_DRAW = 9'b000_000_000;       // Black drawing color (pen color)
+parameter COLOR_ERASE = 9'b111_111_111;      // White (for erasing, same as background)
 
 wire reset;
 assign reset = ~KEY[0];
@@ -60,55 +50,14 @@ reg [8:0] vga_x;  // 9 bits for X (0-319)
 reg [7:0] vga_y;  // 8 bits for Y (0-239)
 reg vga_write;
 
-// Square drawing
-parameter SQUARE_SIZE = 5;
-
-// Drawing state
-wire drawing_active;
-assign drawing_active = drawing_enabled && mouse_left_button;
-
-// Direction indicators - latched so they stay on once detected
-reg move_left_latched;
-reg move_right_latched;
-reg move_up_latched;
-reg move_down_latched;
-
-// Detect movement in each direction
-wire move_left_detect;
-wire move_right_detect;
-wire move_up_detect;
-wire move_down_detect;
-
-// Assigns for testing (removed mouse_data_valid check for immediate updates)
-assign move_left_detect = mouse_data_valid && (mouse_delta_x[8] == 1) && (mouse_delta_x[7:0] != 0);
-assign move_right_detect = mouse_data_valid && (mouse_delta_x[8] == 0) && (mouse_delta_x[7:0] != 0);
-assign move_up_detect = mouse_data_valid && (mouse_delta_y[8] == 1) && (mouse_delta_y[7:0] != 0);
-assign move_down_detect = mouse_data_valid && (mouse_delta_y[8] == 0) && (mouse_delta_y[7:0] != 0);
+// Square drawing - cursor size (variable, controlled by FSM)
+reg [4:0] SQUARE_SIZE;  // Can be 1, 5, 10, or 30
 
 reg [7:0] corrected_delta_x;
 reg [7:0] corrected_delta_y;
 
-// Latch movement indicators - once set, stay on until reset
-always @(posedge CLOCK_50) begin
-	if (reset) begin
-		move_left_latched <= 1'b0;
-		move_right_latched <= 1'b0;
-		move_up_latched <= 1'b0;
-		move_down_latched <= 1'b0;
-	end
-	else begin
-		// Set latches when movement detected, but don't clear them
-		if (move_left_detect)
-			move_left_latched <= 1'b1;
-		if (move_right_detect)
-			move_right_latched <= 1'b1;
-		if (move_up_detect)
-			move_up_latched <= 1'b1;
-		if (move_down_detect)
-			move_down_latched <= 1'b1;
-	end
-end
-
+wire [8:0] pen_colors;
+assign pen_colors = {SW[9], SW[9], SW[9], SW[8], SW[8], SW[8], SW[7], SW[7], SW[7]};  // Pen color controlled by switches SW[9:7]
 
 // PS2 Controller with mouse initialization enabled
 // Module was provided to us
@@ -198,35 +147,6 @@ always @(posedge CLOCK_50) begin
 	end
 end
 
-// Simple pixel drawing: just draw at cursor location when button is pressed
-// always @(posedge CLOCK_50) begin
-// 	if (reset) begin
-// 		vga_x <= 9'd0;
-// 		vga_y <= 8'd0;
-// 		vga_color <= COLOR_BACKGROUND;
-// 		vga_write <= 1'b0;
-// 	end
-// 	else begin
-// 		vga_write <= 1'b0;
-		
-// 		// Draw pixel at cursor location when drawing is enabled and button is pressed
-// 		if (drawing_enabled) begin
-// 			if (mouse_right_button) begin
-// 				vga_write <= 1'b1;
-// 				vga_x <= mouse_x_pos;
-// 				vga_y <= mouse_y_pos;
-// 				vga_color <= COLOR_DRAW;
-// 			end
-// 			else if (mouse_left_button) begin
-// 				vga_write <= 1'b1;
-// 				vga_x <= mouse_x_pos;
-// 				vga_y <= mouse_y_pos;
-// 				vga_color <= COLOR_ERASE;
-// 			end
-// 		end
-// 	end
-// end
-
 // VGA Adapter instance
 vga_adapter #(
 	.RESOLUTION("320x240"),
@@ -249,53 +169,33 @@ vga_adapter #(
 	.VGA_CLK(VGA_CLK)
 );
 
-// Display status on LEDs
-assign LEDR[0] = drawing_enabled; // LED[0] = drawing mode enabled
-assign LEDR[1] = mouse_right_button; // LED[1] = right mouse button
-assign LEDR[2] = mouse_left_button; // LED[2] = left mouse button
-assign LEDR[3] = move_right_latched;
-assign LEDR[4] = move_left_latched; // LED[4] = mouse moving left (latched)
-assign LEDR[5] = move_up_latched; // LED[5] = mouse moving up (latched)
-assign LEDR[6] = move_down_latched; // LED[6] = mouse moving down (latched)
-assign LEDR[7] = drawing_active; // LED[7] = currently drawing
-assign LEDR[8] = 1'b0; // LED[8] = unused
-assign LEDR[9] = 1'b0; // LED[9] = unused
-
 // Square drawing - simple state machine
 reg [1:0] draw_state;
-reg [2:0] x_offset;  // 0 to SQUARE_SIZE-1 (0 to 4 for 5x5)
-reg [2:0] y_offset;  // 0 to SQUARE_SIZE-1 (0 to 4 for 5x5)
+reg [4:0] x_offset;  // 0 to SQUARE_SIZE-1 (supports up to size 20)
+reg [4:0] y_offset;  // 0 to SQUARE_SIZE-1 (supports up to size 20)
 
 parameter DRAW_IDLE = 2'b00;
 parameter DRAW_LOOP = 2'b01;
 parameter DRAW_FINISH = 2'b10;
 
 // Calculate pixel position (centered on cursor)
-// For 5x5 square, center is at offset 2
-// Calculate using unsigned arithmetic with bounds checking
-wire [9:0] px_temp;
-wire [8:0] py_temp;
+// Center offset assigned in FSM always block
+reg [4:0] center_offset;
+
 wire [9:0] px;
 wire [8:0] py;
-wire px_valid, py_valid;
 
-// Pixel X: mouse_x_pos + x_offset - 2 (centered)
-// First add, then check if >= 2 before subtracting
-assign px_temp = mouse_x_pos + x_offset;
-assign px_valid = (px_temp >= 2);
-assign px = px_valid ? (px_temp - 2) : 10'd0;
+// Pixel X: mouse_x_pos + x_offset - center_offset (centered)
+assign px = mouse_x_pos + x_offset - center_offset;
 
-// Pixel Y: mouse_y_pos + y_offset - 2 (centered)
-// First add, then check if >= 2 before subtracting
-assign py_temp = mouse_y_pos + y_offset;
-assign py_valid = (py_temp >= 2);
-assign py = py_valid ? (py_temp - 2) : 9'd0;
+// Pixel Y: mouse_y_pos + y_offset - center_offset (centered)
+assign py = mouse_y_pos + y_offset - center_offset;
 
 always @(posedge CLOCK_50) begin
 	if (reset) begin
 		draw_state <= DRAW_IDLE;
-		x_offset <= 3'd0;
-		y_offset <= 3'd0;
+		x_offset <= 5'd0;
+		y_offset <= 5'd0;
 		vga_write <= 1'b0;
 		vga_x <= 9'd0;
 		vga_y <= 8'd0;
@@ -304,55 +204,236 @@ always @(posedge CLOCK_50) begin
 	else begin
 		vga_write <= 1'b0;
 		
-		case (draw_state)
-			DRAW_IDLE: begin
-				if (drawing_enabled && (mouse_left_button || mouse_right_button)) begin
-					draw_state <= DRAW_LOOP;
-					x_offset <= 3'd0;
-					y_offset <= 3'd0;
+		// Priority 1: Screen reset (highest priority)
+		if (reset_state == RESET_CLEAR) begin
+			vga_x <= reset_x;
+			vga_y <= reset_y;
+			vga_color <= COLOR_BACKGROUND;  // Clear to background color
+			vga_write <= 1'b1;
+		end
+		// Priority 2: Normal drawing
+		else begin
+			case (draw_state)
+				DRAW_IDLE: begin
+					if (drawing_enabled && (mouse_left_button || mouse_right_button)) begin
+						draw_state <= DRAW_LOOP;
+						x_offset <= 5'd0;
+						y_offset <= 5'd0;
+					end
 				end
-			end
-			
-			DRAW_LOOP: begin
-				// Draw all pixels in 5x5 square (no pattern check needed)
-				// Check screen bounds - only draw if valid and within screen
-				if (px_valid && py_valid && px < SCREEN_WIDTH && py < SCREEN_HEIGHT) begin
+				
+				DRAW_LOOP: begin
+					// Normal drawing mode
 					vga_write <= 1'b1;
 					vga_x <= px[8:0];
 					vga_y <= py[7:0];
-					vga_color <= mouse_right_button ? COLOR_DRAW : COLOR_ERASE;
-				end
-				
-				// Advance to next pixel in 5x5 grid
-				if (x_offset >= (SQUARE_SIZE - 1)) begin
-					// End of row - move to next row
-					x_offset <= 3'd0;
-					if (y_offset >= (SQUARE_SIZE - 1)) begin
-						// Done with all rows
-						draw_state <= DRAW_FINISH;
+					
+					if (mouse_left_button) begin
+						vga_color <= pen_colors;  // Left click: pen color (from switches)
+					end
+					else if (mouse_right_button) begin
+						vga_color <= COLOR_ERASE;  // Right click: background color (white)
+					end
+					
+					// Advance to next pixel in square grid
+					if (x_offset >= (SQUARE_SIZE - 1)) begin
+						x_offset <= 5'd0;
+						if (y_offset >= (SQUARE_SIZE - 1)) begin
+							draw_state <= DRAW_FINISH;
+						end
+						else begin
+							y_offset <= y_offset + 1;
+							draw_state <= DRAW_LOOP;
+						end
 					end
 					else begin
-						// Continue to next row - stay in DRAW_LOOP
-						y_offset <= y_offset + 1;
+						x_offset <= x_offset + 1;
 						draw_state <= DRAW_LOOP;
 					end
 				end
+				
+				DRAW_FINISH: begin
+					if (drawing_enabled && (mouse_left_button || mouse_right_button)) begin
+						draw_state <= DRAW_LOOP;
+						x_offset <= 5'd0;
+						y_offset <= 5'd0;
+					end
+					else begin
+						draw_state <= DRAW_IDLE;
+					end
+				end
+			endcase
+		end
+	end
+end
+
+parameter SIZE1 = 5'd1, WAIT1 = 5'd2, SIZE2 = 5'd3, WAIT2 = 5'd4, SIZE3 = 5'd5, WAIT3 = 5'd6, SIZE4 = 5'd7, WAIT4 = 5'd8;
+reg [4:0] Cusor_Size_State;
+
+always @(posedge CLOCK_50) begin
+	if (reset) begin
+		Cusor_Size_State <= SIZE1;
+		SQUARE_SIZE <= 5'd1;  // Initialize to size 1
+		center_offset <= 5'd0;  // Initialize offset for size 1
+	end
+	else begin
+		case (Cusor_Size_State)
+			SIZE1: begin
+				if (KEY[1] == 1'b0) begin
+					Cusor_Size_State <= WAIT1;
+				end
 				else begin
-					// Continue in current row - stay in DRAW_LOOP
-					x_offset <= x_offset + 1;
-					draw_state <= DRAW_LOOP;
+					Cusor_Size_State <= SIZE1;
+				end
+			end
+			WAIT1: begin
+				if (KEY[1] == 1'b1) begin
+					Cusor_Size_State <= SIZE2;
+				end
+				else begin
+					Cusor_Size_State <= WAIT1;
+				end
+			end
+			SIZE2: begin
+				if (KEY[1] == 1'b0) begin
+					Cusor_Size_State <= WAIT2;
+				end
+				else begin
+					Cusor_Size_State <= SIZE2;
+				end
+			end
+			WAIT2: begin
+				if (KEY[1] == 1'b1) begin
+					Cusor_Size_State <= SIZE3;
+				end
+				else begin
+					Cusor_Size_State <= WAIT2;
+				end
+			end
+			SIZE3: begin
+				if (KEY[1] == 1'b0) begin
+					Cusor_Size_State <= WAIT3;
+				end
+				else begin
+					Cusor_Size_State <= SIZE3;
+				end
+			end
+			WAIT3: begin
+				if (KEY[1] == 1'b1) begin
+					Cusor_Size_State <= SIZE4;
+				end
+				else begin
+					Cusor_Size_State <= WAIT3;
+				end
+			end
+			SIZE4: begin
+				if (KEY[1] == 1'b0) begin
+					Cusor_Size_State <= WAIT4;
+				end
+				else begin
+					Cusor_Size_State <= SIZE4;
+				end
+			end
+			WAIT4: begin
+				if (KEY[1] == 1'b1) begin
+					Cusor_Size_State <= SIZE1;
+				end
+				else begin
+					Cusor_Size_State <= WAIT4;
+				end
+			end
+		endcase
+
+		// Update SQUARE_SIZE and center_offset based on current state
+		case (Cusor_Size_State)
+			SIZE1: begin
+				SQUARE_SIZE <= 5'd1;
+				center_offset <= 5'd0;
+			end
+			SIZE2: begin
+				SQUARE_SIZE <= 5'd3;
+				center_offset <= 5'd2;
+			end
+			SIZE3: begin
+				SQUARE_SIZE <= 5'd7;
+				center_offset <= 5'd4;
+			end
+			SIZE4: begin
+				SQUARE_SIZE <= 5'd20;
+				center_offset <= 5'd9;
+			end
+			default: begin
+				SQUARE_SIZE <= SQUARE_SIZE;  // Hold current value
+				center_offset <= center_offset;  // Hold current value
+			end
+		endcase
+	end
+end
+
+// Screen reset state machine
+reg [2:0] reset_state;
+parameter RESET_IDLE = 3'd0;
+parameter RESET_CLEAR = 3'd1;
+parameter RESET_DONE = 3'd2;
+
+reg [8:0] reset_x;      // Current X position during reset
+reg [7:0] reset_y;      // Current Y position during reset
+reg reset_triggered;    // Edge detection flag
+reg prev_reset_key;     // Previous reset key state for edge detection
+
+// Detect reset button press (edge detection on KEY[3])
+always @(posedge CLOCK_50) begin
+	if (reset) begin
+		prev_reset_key <= 1'b1;
+		reset_triggered <= 1'b0;
+	end
+	else begin
+		prev_reset_key <= KEY[3];
+		// Trigger on falling edge of KEY[3] (button pressed)
+		if (!KEY[3] && prev_reset_key) begin
+			reset_triggered <= 1'b1;
+		end
+		else if (reset_state == RESET_DONE) begin
+			reset_triggered <= 1'b0;
+		end
+	end
+end
+
+// Screen reset state machine
+always @(posedge CLOCK_50) begin
+	if (reset) begin
+		reset_state <= RESET_IDLE;
+		reset_x <= 9'd0;
+		reset_y <= 8'd0;
+	end
+	else begin
+		case (reset_state)
+			RESET_IDLE: begin
+				if (reset_triggered) begin
+					reset_state <= RESET_CLEAR;
+					reset_x <= 9'd0;
+					reset_y <= 8'd0;
 				end
 			end
 			
-			DRAW_FINISH: begin
-				if (drawing_enabled && (mouse_left_button || mouse_right_button)) begin
-					draw_state <= DRAW_LOOP;
-					x_offset <= 3'd0;
-					y_offset <= 3'd0;
+			RESET_CLEAR: begin
+				// Increment through all pixels
+				if (reset_x < (SCREEN_WIDTH - 1)) begin
+					reset_x <= reset_x + 1'b1;
 				end
 				else begin
-					draw_state <= DRAW_IDLE;
+					reset_x <= 9'd0;
+					if (reset_y < (SCREEN_HEIGHT - 1)) begin
+						reset_y <= reset_y + 1'b1;
+					end
+					else begin
+						reset_state <= RESET_DONE;
+					end
 				end
+			end
+			
+			RESET_DONE: begin
+				reset_state <= RESET_IDLE;
 			end
 		endcase
 	end

@@ -60,7 +60,7 @@ module vga_adapter( resetn, clock, color, x, y, write,
     parameter COLS = (RESOLUTION == "640x480") ? 640 : ((RESOLUTION == "320x240") ? 320 : 160);
     parameter ROWS = (RESOLUTION == "640x480") ? 480 : ((RESOLUTION == "320x240") ? 240 : 120);
 
-    parameter BACKGROUND_IMAGE = "./white_640_9.mif";
+    parameter BACKGROUND_IMAGE = "./Files/background.mif";
     /* The initial screen displayed when the circuit is first programmed onto the DE1-SoC board 
      * can be defined using a MIF file. The file contains the initial color for each pixel on the
      * screen and is placed in the video memory when the FPGA is programmed. Note that resetting
